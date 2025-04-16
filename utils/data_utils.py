@@ -3,9 +3,10 @@ import numpy as np
 import torch
 import fpsample
 
-def read_ply(filename):
-    """.plyファイルを読み込み
-        点群(x, y, z, intensity)のnumpy配列を返す
+def load_ply(filename, intensity=True):
+    """
+    .ply ファイルを読み込み、
+    点群(x, y, z, intensity)の NumPy 配列を返す。
     """
     try:
         with open(filename, 'r') as f:
@@ -13,23 +14,23 @@ def read_ply(filename):
             header_index = None
             for i, line in enumerate(lines):
                 if 'end_header' in line:
-                    header_index = i +1
+                    header_index = i
                     break
             if header_index is None:
                 raise ValueError("PLYファイルのヘッダが正しく読み込めませんでした。")
             
             # ヘッダ以降の行を読み込み
-            points = np.array([list(map(float, l.split())) for l in lines[header_index:]])
-            if points.shape[1] < 4:
-                # xyz + intensity(もしくは他の属性)がなければエラー
-                raise ValueError(f"期待される列数に満たないデータが検出されました: {points.shape[1]}列")
+            points = np.array([list(map(float, l.split())) for l in lines[header_index+1:]])
+            #print('shape:', points.shape)
+            xyz_points = points[:, :3]
+            if not intensity:
+                return xyz_points
+            else:
+                # [x, y, z, intensity] の形に整形
+                # intensity が最後の列にあると仮定 (points[:, -1])
+                points = np.concatenate([xyz_points, points[:, -1].reshape(-1, 1)], axis=1)
+                return points
             
-            # [x, y, z, intensity] の形に整形
-            # intensity が最後の列にあると仮定 (points[:, -1])
-            points = np.concatenate([points[:, :3], points[:, -1].reshape(-1, 1)], axis=1)
-            
-            return points
-        
     except FileNotFoundError:
         print(f"ファイルが見つかりません: {filename}")
         # 必要に応じて sys.exit(1) などで終了するか、Noneを返す
@@ -40,6 +41,7 @@ def read_ply(filename):
     except Exception as e:
         print(f"予期せぬエラーが発生しました（load_ply）: {e}")
         return None
+
     
 def write_ply(filename, pcd):
     """
@@ -132,3 +134,47 @@ def normalize_pc(pointcloud: np.ndarray, intensity=False) -> np.ndarray:
         # 各点を max_val で割るだけのスケーリング（平行移動は行わない）
         norm_pointcloud = pointcloud / max_val
     return norm_pointcloud
+
+def cos_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def compute_loss(T_pred, T_true):
+    #回転行列得る
+    R_pred = T_pred[:3, :3]
+    R_true = T_true[:3, :3]
+
+    R_pred_inv = np.linalg.inv(R_pred)
+    loss_matrix = np.dot(R_pred_inv, R_true)
+    R_loss = np.linalg.norm(loss_matrix - np.eye(3))
+
+    #ｈ並進行列を得る
+    t_pred = T_pred[:3, 3]
+    t_true = T_true[:3, 3]
+    print(f"t_pred: {t_pred}")
+    print(f"t_ture: {t_true}")
+    translation_loss = 1 - cos_similarity(t_pred, t_true)
+    
+    print(f"R_loss: {R_loss:.3f}")
+    print(f"Translation loss: {translation_loss:.3f}")
+    loss_value = R_loss + translation_loss
+    return loss_value 
+
+def compute_simple_loss(T_pred, T_true):
+    T_pred_inv = np.linalg.inv(T_pred)
+    loss_matrix = np.dot(T_pred_inv, T_true)
+    loss_value = np.linalg.norm(loss_matrix - np.eye(4))
+    return loss_value
+
+
+def compute_transformation_errors(T_pred, T_true):
+    R_pred = T_pred[:3, :3]
+    R_true = T_true[:3, :3]
+    R_pred_inv = np.linalg.inv(R_pred)
+    loss_matrix = np.dot(R_pred_inv, R_true)
+    R_loss = np.linalg.norm(loss_matrix - np.eye(3))
+
+    t_pred = T_pred[:3, 3]
+    t_true = T_true[:3, 3]
+    translation_loss = 1 - cos_similarity(t_pred, t_true)
+
+    return R_loss, translation_loss
